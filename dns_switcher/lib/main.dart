@@ -161,6 +161,45 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     super.dispose();
   }
 
+ 
+  bool _isValidIPAddress(String ip) {
+    if (ip.trim().isEmpty) return false;
+    
+    ip = ip.trim();
+    
+    final parts = ip.split('.');
+    if (parts.length != 4) return false;
+    
+    for (final part in parts) {
+      if (part.isEmpty) return false;
+      
+      final number = int.tryParse(part);
+      if (number == null) return false;
+      
+      if (number < 0 || number > 255) return false;
+      
+      if (part.length > 1 && part.startsWith('0')) return false;
+    }
+    
+    return true;
+  }
+
+  String? _validateDNSAddress(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'Please enter a DNS address';
+    }
+    
+    final addresses = value.split(',').map((e) => e.trim()).toList();
+    
+    for (final address in addresses) {
+      if (!_isValidIPAddress(address)) {
+        return 'Invalid IP address format: $address\nExample: 8.8.8.8 or 8.8.8.8, 8.8.4.4';
+      }
+    }
+    
+    return null;
+  }
+
   void _selectDNS(String dnsName) {
     setState(() {
       _selectedDNS = dnsName;
@@ -168,7 +207,6 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     });
     _statusAnimationController.forward();
     
-    // Show success feedback
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -194,7 +232,6 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     });
     _statusAnimationController.reverse();
     
-    // Show deactivation feedback
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Row(
@@ -252,20 +289,10 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
               TextFormField(
                 decoration: const InputDecoration(
                   labelText: 'DNS Address',
-                  hintText: 'e.g., 8.8.8.8',
+                  hintText: 'e.g., 8.8.8.8 or 8.8.8.8, 8.8.4.4',
                   prefixIcon: Icon(Icons.dns),
                 ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Please enter a DNS address';
-                  }
-                  // Basic IP validation
-                  final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}');
-                  if (!ipRegex.hasMatch(value.trim())) {
-                    return 'Please enter a valid IP address';
-                  }
-                  return null;
-                },
+                validator: _validateDNSAddress,
                 onChanged: (value) => dnsAddress = value.trim(),
               ),
             ],
@@ -288,7 +315,6 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
                 debugPrint('Added Custom DNS: $dnsName ($dnsAddress)');
                 Navigator.pop(context);
                 
-                // Show success message
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text('Custom DNS "$dnsName" added successfully'),
@@ -300,6 +326,68 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
               }
             },
             child: const Text('Add DNS'),
+            
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteDNSDialog(String dnsName, int index) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(Icons.delete, color: Colors.red.shade600),
+            const SizedBox(width: 12),
+            const Text('Delete Custom DNS'),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to delete "$dnsName"?\n\nThis action cannot be undone.',
+          style: TextStyle(color: Colors.grey.shade700),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey.shade600)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {
+                if (_selectedDNS == dnsName) {
+                  _isDNSActive = false;
+                  _selectedDNS = null;
+                  _statusAnimationController.reverse();
+                }
+                _customDNSList.removeAt(index);
+              });
+              
+              debugPrint('Deleted Custom DNS: $dnsName');
+              Navigator.pop(context);
+              
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      const Icon(Icons.delete, color: Colors.white, size: 20),
+                      const SizedBox(width: 12),
+                      Text('Custom DNS "$dnsName" deleted'),
+                    ],
+                  ),
+                  backgroundColor: Colors.red.shade600,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
           ),
         ],
       ),
@@ -390,6 +478,7 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     required String description,
     bool isSelected = false,
     VoidCallback? onTap,
+    VoidCallback? onLongPress,
     bool isCustom = false,
   }) {
     return Card(
@@ -397,6 +486,7 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Row(
@@ -454,13 +544,28 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.primaryColorAccent,
-                        fontWeight: FontWeight.w500,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.primaryColorAccent,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        if (isCustom) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            '• Hold to delete',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.grey.shade500,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -489,11 +594,34 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
                   Icons.check_circle,
                   color: Colors.green.shade600,
                   size: 24,
-                ),
+              )
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildFloatingActionButtons() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        if (_isDNSActive)
+          FloatingActionButton.extended(
+            onPressed: _deactivateDNS,
+            icon: const Icon(Icons.power_off),
+            label: const Text('Deactivate'),
+            backgroundColor: Colors.red.shade600,
+            heroTag: "deactivate_btn",
+          ),
+        
+        FloatingActionButton.extended(
+          onPressed: _showAddDNSDialog,
+          icon: const Icon(Icons.add),
+          label: const Text('Add Custom DNS'),
+          heroTag: "add_dns_btn",
+        ),
+      ],
     );
   }
 
@@ -533,11 +661,9 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // DNS Status Card
             _buildStatusCard(),
             const SizedBox(height: 24),
             
-            // Predefined DNS Section
             Row(
               children: [
                 Icon(Icons.dns, color: AppColors.primaryColorAccent),
@@ -564,7 +690,6 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
               onTap: () => _selectDNS(dns['name']),
             )),
             
-            // Custom DNS Section
             if (_customDNSList.isNotEmpty) ...[
               const SizedBox(height: 24),
               Row(
@@ -583,48 +708,29 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
               ),
               const SizedBox(height: 16),
               
-              ..._customDNSList.map((dns) => _buildDNSOption(
-                name: dns['name']!,
-                subtitle: 'Custom DNS',
-                address: dns['address']!,
-                icon: Icons.dns,
-                description: '',
-                isSelected: _selectedDNS == dns['name'],
-                onTap: () => _selectDNS(dns['name']!),
-                isCustom: true,
-              )),
+              ..._customDNSList.asMap().entries.map((entry) {
+                int index = entry.key;
+                Map<String, String> dns = entry.value;
+                return _buildDNSOption(
+                  name: dns['name']!,
+                  subtitle: 'Custom DNS',
+                  address: dns['address']!,
+                  icon: Icons.dns,
+                  description: '',
+                  isSelected: _selectedDNS == dns['name'],
+                  onTap: () => _selectDNS(dns['name']!),
+                  onLongPress: () => _showDeleteDNSDialog(dns['name']!, index),
+                  isCustom: true,
+                );
+              }),
             ],
             
-            const SizedBox(height: 32),
-            
-            // Deactivate Button
-            if (_isDNSActive)
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _deactivateDNS,
-                  icon: const Icon(Icons.power_off),
-                  label: const Text('Deactivate DNS'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red.shade600,
-                    side: BorderSide(color: Colors.red.shade300),
-                    minimumSize: const Size(double.infinity, 52),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ),
-            
-            const SizedBox(height: 100), 
+            const SizedBox(height: 100), // Extra space for floating buttons
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddDNSDialog,
-        icon: const Icon(Icons.add),
-        label: const Text('Add Custom DNS'),
-      ),
+      floatingActionButton: _buildFloatingActionButtons(),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 }
