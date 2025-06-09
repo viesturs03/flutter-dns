@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'colors.dart';
+import 'dart:io' show Platform;
 
 void main() {
   runApp(const DNSSwitcherApp());
@@ -103,10 +104,15 @@ class DNSSwitcherHomePage extends StatefulWidget {
 class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     with TickerProviderStateMixin {
   bool _isDNSActive = false;
+  bool _isLoading = false; // New loading state
   List<Map<String, String>> _customDNSList = [];
   String? _selectedDNS;
+  String? _loadingDNS; // Track which DNS is being activated
   late AnimationController _statusAnimationController;
+  late AnimationController _loadingAnimationController; // New loading animation controller
   late Animation<double> _statusAnimation;
+  late Animation<double> _loadingAnimation; // New loading animation
+  static const _vpnChannel = MethodChannel('com.example.dns_switcher/vpn');
 
   final List<Map<String, dynamic>> _predefinedDNS = [
     {
@@ -146,6 +152,10 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
       duration: const Duration(milliseconds: 300),
       vsync: this,
     );
+    _loadingAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    );
     _statusAnimation = Tween<double>(
       begin: 0.0,
       end: 1.0,
@@ -153,15 +163,22 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
       parent: _statusAnimationController,
       curve: Curves.easeInOut,
     ));
+    _loadingAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _loadingAnimationController,
+      curve: Curves.easeInOut,
+    ));
   }
 
   @override
   void dispose() {
     _statusAnimationController.dispose();
+    _loadingAnimationController.dispose();
     super.dispose();
   }
 
- 
   bool _isValidIPAddress(String ip) {
     if (ip.trim().isEmpty) return false;
     
@@ -200,54 +217,186 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     return null;
   }
 
-  void _selectDNS(String dnsName) {
-    setState(() {
-      _selectedDNS = dnsName;
-      _isDNSActive = true;
-    });
-    _statusAnimationController.forward();
+  void _showTopSnackBar(String message, Color backgroundColor, {IconData? icon}) {
+    final overlay = Overlay.of(context);
+    late OverlayEntry overlayEntry;
     
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle, color: Colors.white, size: 20),
-            const SizedBox(width: 12),
-            Text('$dnsName activated successfully'),
-          ],
+    overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: MediaQuery.of(context).padding.top + 10,
+        left: 16,
+        right: 16,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: backgroundColor,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, color: Colors.white, size: 20),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: Text(
+                    message,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        backgroundColor: Colors.green.shade600,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
     
-    debugPrint('Selected DNS: $dnsName');
+    overlay.insert(overlayEntry);
+    
+    // Remove the overlay after 3 seconds
+    Future.delayed(const Duration(seconds: 3), () {
+      overlayEntry.remove();
+    });
+  }
+
+  void _selectDNS(String dnsName) async {
+    if (Platform.isIOS) {
+      _showTopSnackBar(
+        'This feature is not available for iOS at the moment.',
+        Colors.red.shade600,
+        icon: Icons.error,
+      );
+      return;
+    }
+
+    // Start loading state
+    setState(() {
+      _isLoading = true;
+      _loadingDNS = dnsName;
+    });
+    _loadingAnimationController.repeat();
+
+    String? dnsAddress;
+    for (var dns in _predefinedDNS) {
+      if (dns['name'] == dnsName) {
+        dnsAddress = dns['address'];
+        break;
+      }
+    }
+    if (dnsAddress == null) {
+      for (var dns in _customDNSList) {
+        if (dns['name'] == dnsName) {
+          dnsAddress = dns['address'];
+          break;
+        }
+      }
+    }
+
+    if (dnsAddress != null) {
+      try {
+        await _startVpn(dnsAddress);
+        
+        // Success - update UI
+        setState(() {
+          _selectedDNS = dnsName;
+          _isDNSActive = true;
+          _isLoading = false;
+          _loadingDNS = null;
+        });
+        _loadingAnimationController.stop();
+        _statusAnimationController.forward();
+
+        _showTopSnackBar(
+          '$dnsName activated successfully',
+          Colors.green.shade600,
+          icon: Icons.check_circle,
+        );
+
+        debugPrint('Selected DNS: $dnsName');
+        
+      } catch (e) {
+        // Error - reset loading state
+        setState(() {
+          _isLoading = false;
+          _loadingDNS = null;
+        });
+        _loadingAnimationController.stop();
+        
+        // Handle different types of errors
+        String errorMessage;
+        if (e.toString().contains('PERMISSION_DENIED') || 
+            e.toString().contains('User denied VPN permission')) {
+          errorMessage = 'VPN permission denied. Please allow VPN access to use this feature.';
+        } else {
+          errorMessage = 'Failed to activate DNS. Please try again.';
+        }
+        
+        _showTopSnackBar(
+          errorMessage,
+          Colors.red.shade600,
+          icon: Icons.error,
+        );
+        
+        debugPrint('Error starting VPN: $e');
+      }
+    }
+  }
+
+  Future<void> _startVpn(String dnsAddress) async {
+    await _vpnChannel.invokeMethod('startVpn', {'dnsAddress': dnsAddress});
   }
 
   void _deactivateDNS() {
+    if (Platform.isIOS) {
+      _showTopSnackBar(
+        'This feature is not available for iOS at the moment.',
+        Colors.red.shade600,
+        icon: Icons.error,
+      );
+      return;
+    }
+
     setState(() {
       _isDNSActive = false;
       _selectedDNS = null;
     });
     _statusAnimationController.reverse();
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Row(
-          children: [
-            Icon(Icons.power_off, color: Colors.white, size: 20),
-            SizedBox(width: 12),
-            Text('DNS deactivated'),
-          ],
-        ),
-        backgroundColor: Colors.orange.shade600,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
+
+    _stopVpn();
+
+    _showTopSnackBar(
+      'DNS deactivated',
+      Colors.orange.shade600,
+      icon: Icons.power_off,
     );
-    
+
     debugPrint('DNS Deactivated');
+  }
+
+  Future<void> _stopVpn() async {
+    try {
+      await _vpnChannel.invokeMethod('stopVpn');
+    } catch (e) {
+      debugPrint('Error stopping VPN: $e');
+      _showTopSnackBar(
+        'Failed to stop VPN: $e',
+        Colors.red.shade600,
+        icon: Icons.error,
+      );
+    }
   }
 
   void _showAddDNSDialog() {
@@ -315,18 +464,14 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
                 debugPrint('Added Custom DNS: $dnsName ($dnsAddress)');
                 Navigator.pop(context);
                 
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Custom DNS "$dnsName" added successfully'),
-                    backgroundColor: Colors.green.shade600,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
+                _showTopSnackBar(
+                  'Custom DNS "$dnsName" added successfully',
+                  Colors.green.shade600,
+                  icon: Icons.check_circle,
                 );
               }
             },
             child: const Text('Add DNS'),
-            
           ),
         ],
       ),
@@ -368,26 +513,17 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
               debugPrint('Deleted Custom DNS: $dnsName');
               Navigator.pop(context);
               
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Row(
-                    children: [
-                      const Icon(Icons.delete, color: Colors.white, size: 20),
-                      const SizedBox(width: 12),
-                      Text('Custom DNS "$dnsName" deleted'),
-                    ],
-                  ),
-                  backgroundColor: Colors.red.shade600,
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
+              _showTopSnackBar(
+                'Custom DNS "$dnsName" deleted',
+                Colors.red.shade600,
+                icon: Icons.delete,
               );
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red.shade600,
               foregroundColor: Colors.white,
             ),
-            child: const Text('Delete'),
+            child: const Text('Delete'),  
           ),
         ],
       ),
@@ -398,19 +534,35 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     return AnimatedBuilder(
       animation: _statusAnimation,
       builder: (context, child) {
+        Color cardColor;
+        String statusText;
+        IconData statusIcon;
+        
+        if (_isLoading) {
+          cardColor = Colors.blue.shade500;
+          statusText = 'Connecting...';
+          statusIcon = Icons.sync;
+        } else if (_isDNSActive) {
+          cardColor = Colors.green.shade500;
+          statusText = 'Active';
+          statusIcon = Icons.check_circle;
+        } else {
+          cardColor = Colors.grey.shade500;
+          statusText = 'Inactive';
+          statusIcon = Icons.cancel;
+        }
+
         return Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: _isDNSActive
-                  ? [Colors.green.shade400, Colors.green.shade600]
-                  : [Colors.grey.shade400, Colors.grey.shade600],
+              colors: [cardColor.withOpacity(0.8), cardColor],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                color: (_isDNSActive ? Colors.green : Colors.grey).withOpacity(0.3),
+                color: cardColor.withOpacity(0.3),
                 blurRadius: 8,
                 offset: const Offset(0, 4),
               ),
@@ -432,27 +584,52 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    AnimatedRotation(
-                      turns: _statusAnimation.value,
-                      duration: const Duration(milliseconds: 300),
-                      child: Icon(
-                        _isDNSActive ? Icons.check_circle : Icons.cancel,
-                        color: Colors.white,
-                        size: 24,
-                      ),
+                    AnimatedBuilder(
+                      animation: _loadingAnimation,
+                      builder: (context, child) {
+                        if (_isLoading) {
+                          return Transform.rotate(
+                            angle: _loadingAnimation.value * 2 * 3.14159,
+                            child: Icon(
+                              statusIcon,
+                              color: Colors.white,
+                              size: 24,
+                            ),
+                          );
+                        } else {
+                          return AnimatedRotation(
+                            turns: _statusAnimation.value,
+                            duration: const Duration(milliseconds: 300),
+                            child: Icon(
+                              statusIcon,
+                              color: Colors.white,
+                              size: 24,
+                            ),
+                          );
+                        }
+                      },
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _isDNSActive ? 'Active' : 'Inactive',
+                  statusText,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                if (_isDNSActive && _selectedDNS != null) ...[
+                if (_isLoading && _loadingDNS != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Activating: $_loadingDNS',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.9),
+                      fontSize: 14,
+                    ),
+                  ),
+                ] else if (_isDNSActive && _selectedDNS != null) ...[
                   const SizedBox(height: 4),
                   Text(
                     'Using: $_selectedDNS',
@@ -481,121 +658,158 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
     VoidCallback? onLongPress,
     bool isCustom = false,
   }) {
+    bool isCurrentlyLoading = _isLoading && _loadingDNS == name;
+    
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? AppColors.primaryColorAccent
-                      : Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  icon,
-                  color: isSelected ? Colors.white : AppColors.primaryColorText,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            name,
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.primaryColorDark,
+        onTap: _isLoading ? null : onTap, // Disable tap when loading
+        onLongPress: _isLoading ? null : onLongPress, // Disable long press when loading
+        child: Opacity(
+          opacity: _isLoading && !isCurrentlyLoading ? 0.5 : 1.0,
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? AppColors.primaryColorAccent
+                        : isCurrentlyLoading
+                            ? Colors.blue.shade100
+                            : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: isCurrentlyLoading
+                      ? SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.blue.shade600,
                             ),
                           ),
+                        )
+                      : Icon(
+                          icon,
+                          color: isSelected ? Colors.white : AppColors.primaryColorText,
+                          size: 24,
                         ),
-                        if (isSelected)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.green.shade100,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
                             child: Text(
-                              'ACTIVE',
+                              name,
                               style: TextStyle(
-                                fontSize: 10,
+                                fontSize: 16,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.green.shade700,
+                                color: AppColors.primaryColorDark,
                               ),
                             ),
                           ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.primaryColorAccent,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        if (isCustom) ...[
-                          const SizedBox(width: 8),
+                          if (isSelected)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'ACTIVE',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.green.shade700,
+                                ),
+                              ),
+                            )
+                          else if (isCurrentlyLoading)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'CONNECTING',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.blue.shade700,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
                           Text(
-                            '• Hold to delete',
+                            subtitle,
                             style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey.shade500,
-                              fontStyle: FontStyle.italic,
+                              fontSize: 12,
+                              color: AppColors.primaryColorAccent,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
+                          if (isCustom) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              '• Hold to delete',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.grey.shade500,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      address,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                        fontFamily: 'monospace',
                       ),
-                    ),
-                    if (!isCustom) ...[
                       const SizedBox(height: 4),
                       Text(
-                        description,
+                        address,
                         style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade500,
+                          fontSize: 13,
+                          color: Colors.grey.shade600,
+                          fontFamily: 'monospace',
                         ),
                       ),
+                      if (!isCustom) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          description,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              if (isSelected)
-                Icon(
-                  Icons.check_circle,
-                  color: Colors.green.shade600,
-                  size: 24,
-              )
-            ],
+                if (isSelected)
+                  Icon(
+                    Icons.check_circle,
+                    color: Colors.green.shade600,
+                    size: 24,
+                  )
+              ],
+            ),
           ),
         ),
       ),
@@ -608,17 +822,18 @@ class _DNSSwitcherHomePageState extends State<DNSSwitcherHomePage>
       children: [
         if (_isDNSActive)
           FloatingActionButton.extended(
-            onPressed: _deactivateDNS,
+            onPressed: _isLoading ? null : _deactivateDNS,
             icon: const Icon(Icons.power_off),
             label: const Text('Deactivate'),
-            backgroundColor: Colors.red.shade600,
+            backgroundColor: _isLoading ? Colors.grey : Colors.red.shade600,
             heroTag: "deactivate_btn",
           ),
         
         FloatingActionButton.extended(
-          onPressed: _showAddDNSDialog,
+          onPressed: _isLoading ? null : _showAddDNSDialog,
           icon: const Icon(Icons.add),
           label: const Text('Add Custom DNS'),
+          backgroundColor: _isLoading ? Colors.grey : AppColors.primaryColorAccent,
           heroTag: "add_dns_btn",
         ),
       ],
