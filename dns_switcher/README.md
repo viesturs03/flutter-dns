@@ -1,16 +1,22 @@
-# dns_switcher
+# DNS Switcher
+![App Screenshot](lib\assets\images\Screenshot_20250611_114723.png)
 
-A new Flutter project.
+**DNS Switcher** is a simple, user-friendly app that allows users to change their DNS settings with just one click. Whether you want the **fastest**, **safest**, or a **custom** DNS, this app makes it easy.
 
-## Getting Started
+## 🧠 Why This App?
 
-This project is a starting point for a Flutter application.
+Most users aren't familiar with what DNS (Domain Name System) is — let alone how to configure it. Changing DNS settings manually can be confusing, buried deep in system menus, and prone to error.
 
-A few resources to get you started if this is your first Flutter project:
+## ✅ What This App Solves
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+- Eliminates the need for technical knowledge to configure DNS
+- Simplifies the process of switching to **safe**, **fast**, or **custom** DNS options
+- Improves **privacy**, **speed**, and **reliability** of internet connections
+- Offers one-click switching — no need to navigate system settings
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 🚀 Features
+
+- One-click DNS switching
+- Predefined options: Safe, Fast, or Custom DNS
+- Clean and intuitive UI
+- Designed for non-technical users
