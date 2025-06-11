@@ -1,5 +1,5 @@
 # DNS Switcher
-![App Screenshot](dns_switcher\lib\assets\images\app.png)
+![App Screenshot](dns_switcher/lib/assets/images/app.png)
 
 **DNS Switcher** is a simple, user-friendly app that allows users to change their DNS settings with just one click. Whether you want the **fastest**, **safest**, or a **custom** DNS, this app makes it easy.
 
